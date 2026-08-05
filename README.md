@@ -1,8 +1,10 @@
 # Find It Fun
 
-> **TL;DR:** Find It Fun is an offline Android app for discovering nearby
-> Bluetooth devices, following their signal warmer or colder, saving your own
-> device names, and exploring GNSS satellites and magnetic fields for fun.
+> **TL;DR:** Inspired by [this Bluetooth-finding tweet](https://x.com/un1c0rnioz/status/2084686552299634805)
+> and its author's [`findphone` repository](https://github.com/ben-z/findphone),
+> Find It Fun is an offline Android app for discovering nearby Bluetooth
+> devices, following their signal warmer or colder, saving your own device
+> names, and exploring GNSS satellites and magnetic fields for fun.
 
 <p align="center">
   <img src="docs/screenshots/leviot-hunt.png" alt="Hunting a saved Bluetooth device" width="31%">
