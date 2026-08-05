@@ -80,8 +80,8 @@ save or upload scan results unless you explicitly redirect its output.
 ## Publishing
 
 Generated APKs, machine-local Android paths, Gradle caches, scan captures, and
-debug signing material are ignored by Git. Before publishing a fork, choose an
-open-source license and add its `LICENSE` file.
+debug signing material are ignored by Git. The source is released under the MIT
+License; see [LICENSE](LICENSE).
 
 Publish the files selected by Git; do not upload a ZIP of the entire developer
 folder. Ignored build reports can contain the computer hostname and absolute
