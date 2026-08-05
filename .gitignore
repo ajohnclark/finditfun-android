@@ -1,0 +1,35 @@
+# Android, Gradle, and IDE state
+.android-home/
+.gradle/
+.gradle-user-home/
+.idea/
+.local/
+**/build/
+local.properties
+*.iml
+
+# Build and scan output
+artifacts/
+captures/
+scan-results/
+*.apk
+*.aab
+*.ap_
+*.log
+
+# Signing material and local configuration
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Tool and OS state
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
