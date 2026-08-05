@@ -1,7 +1,16 @@
 # Find It Fun
 
-A command-line-built radio playground for modern Android phones. The app keeps
-all observations on the phone and includes:
+> **TL;DR:** Find It Fun is an offline Android app for discovering nearby
+> Bluetooth devices, following their signal warmer or colder, saving your own
+> device names, and exploring GNSS satellites and magnetic fields for fun.
+
+<p align="center">
+  <img src="docs/screenshots/leviot-hunt.png" alt="Hunting a saved Bluetooth device" width="31%">
+  <img src="docs/screenshots/space-mode.png" alt="GNSS satellites in Space mode" width="31%">
+  <img src="docs/screenshots/magnetic-mode.png" alt="Live magnetic field meter" width="31%">
+</p>
+
+The app keeps all observations on the phone and includes:
 
 - **Nearby:** continuously surveys detectable Bluetooth Low Energy advertisers.
 - **Hunt:** tap a device for warmer/colder guidance, proximity clicks, haptics,
@@ -32,7 +41,12 @@ instead of pretending to track them. Custom names are keyed locally to Android's
 hidden device identifier; privacy-preserving devices that rotate identifiers may
 occasionally need to be named again.
 
-## Command-line build
+## Build and install
+
+The project requires Java 17, Android SDK Platform 35, and Android SDK Build
+Tools 35.0.0.
+
+### Windows (PowerShell)
 
 From PowerShell in this directory:
 
@@ -51,8 +65,6 @@ artifacts/finditfun-mvp-debug.apk
 
 All Gradle, Android-user, signing, and build state is kept inside this folder.
 
-## Install on a connected Android device
-
 Enable Developer options and USB debugging, connect the phone, approve its RSA
 prompt, then run:
 
@@ -62,7 +74,48 @@ prompt, then run:
 
 The install script rebuilds and verifies the APK before using `adb install -r`.
 
-## Direct Gradle use
+### macOS and Linux
+
+Set the Android SDK location if it is not already configured. Android Studio's
+usual paths are `$HOME/Library/Android/sdk` on macOS and `$HOME/Android/Sdk` on
+Linux:
+
+```bash
+# Use this on macOS:
+export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+
+# Or use this on Linux:
+# export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+
+export PATH="$ANDROID_SDK_ROOT/platform-tools:$PATH"
+```
+
+Make sure `java -version` reports Java 17, or set `JAVA_HOME` to a Java 17 JDK.
+Then create the ignored project-local debug key once and build:
+
+```bash
+mkdir -p .local
+if [ ! -f .local/finditfun-debug.keystore ]; then
+  keytool -genkeypair \
+    -keystore .local/finditfun-debug.keystore \
+    -storepass android -keypass android -alias androiddebugkey \
+    -dname "CN=Find It Fun Debug,O=Local Development,C=US" \
+    -keyalg RSA -keysize 2048 -validity 10000
+fi
+
+chmod +x gradlew
+./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+```
+
+The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. With USB
+debugging enabled and the phone connected, install and launch it with:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.finditfun.app.debug/com.finditfun.app.MainActivity
+```
+
+### Direct Gradle use on Windows
 
 `build.ps1` supplies the discovered Java and Android paths. If those paths are
 already in your environment, the usual commands also work:
