@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -33,9 +34,19 @@ import com.finditfun.app.hunt.HuntMotionController;
 import com.finditfun.app.hunt.HuntSurvey;
 import com.finditfun.app.magnetic.MagneticController;
 import com.finditfun.app.signal.SignalMath;
+import com.finditfun.app.sound.AcousticAnalysis;
+import com.finditfun.app.sound.AcousticPingController;
+import com.finditfun.app.ui.EchoView;
 import com.finditfun.app.ui.HuntMapView;
 import com.finditfun.app.ui.MagneticGraphView;
 import com.finditfun.app.ui.SkyPlotView;
+import com.finditfun.app.ui.WifiMapView;
+import com.finditfun.app.ui.WifiSpectrumView;
+import com.finditfun.app.wifi.WifiAccessPoint;
+import com.finditfun.app.wifi.WifiConnectionSnapshot;
+import com.finditfun.app.wifi.WifiController;
+import com.finditfun.app.wifi.WifiMath;
+import com.finditfun.app.wifi.WifiSurvey;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -46,6 +57,8 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH = 10;
     private static final int REQUEST_LOCATION = 11;
     private static final int REQUEST_ACTIVITY = 12;
+    private static final int REQUEST_WIFI = 13;
+    private static final int REQUEST_AUDIO = 14;
 
     private static final int NIGHT = Color.rgb(8, 16, 24);
     private static final int PANEL = Color.rgb(16, 28, 41);
@@ -56,15 +69,18 @@ public final class MainActivity extends Activity {
     private static final int AMBER = Color.rgb(255, 202, 88);
     private static final int RED = Color.rgb(255, 102, 122);
 
-    private enum Screen { NEARBY, HUNT, SPACE, MAGNETIC }
+    private enum Screen { NEARBY, HUNT, WIFI, SOUND, SPACE, MAGNETIC }
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final DeviceAdapter deviceAdapter = new DeviceAdapter();
     private final ArrayList<BleDeviceSnapshot> nearbyDevices = new ArrayList<>();
     private List<GnssController.Satellite> satellites = Collections.emptyList();
+    private List<WifiAccessPoint> wifiAccessPoints = Collections.emptyList();
 
     private FrameLayout content;
     private Button nearbyNav;
+    private Button wifiNav;
+    private Button soundNav;
     private Button spaceNav;
     private Button magneticNav;
     private Screen screen = Screen.NEARBY;
@@ -74,9 +90,12 @@ public final class MainActivity extends Activity {
     private DeviceAliasStore aliasStore;
     private GnssController gnssController;
     private MagneticController magneticController;
+    private WifiController wifiController;
+    private AcousticPingController acousticPingController;
     private HuntMotionController motionController;
     private HuntFeedback feedback;
     private final HuntSurvey huntSurvey = new HuntSurvey();
+    private final WifiSurvey wifiSurvey = new WifiSurvey();
     private String huntKey;
     private HuntMapView.Mode huntMapMode = HuntMapView.Mode.BEARING;
     private float huntHeading;
@@ -87,6 +106,14 @@ public final class MainActivity extends Activity {
     private int lastSurveySampleCount = -1;
     private boolean soundEnabled = true;
     private boolean hapticsEnabled = true;
+    private boolean wifiWalking = true;
+    private String wifiStatus = "Preparing Wi-Fi…";
+    private WifiConnectionSnapshot wifiConnection;
+    private AcousticAnalysis.Result soundResult;
+    private boolean soundContinuous;
+    private boolean pendingSoundPing;
+    private boolean pendingSoundContinuous;
+    private String soundStatus = "Ready for an acoustic snapshot.";
 
     private String bleStatus = "Starting Bluetooth…";
     private TextView nearbyStatusView;
@@ -109,6 +136,20 @@ public final class MainActivity extends Activity {
     private TextView magneticStateView;
     private TextView magneticAxesView;
     private MagneticGraphView magneticGraphView;
+    private TextView wifiStatusView;
+    private TextView wifiNetworkView;
+    private TextView wifiRssiView;
+    private TextView wifiStrengthView;
+    private TextView wifiDetailsView;
+    private TextView wifiNearbyView;
+    private Button wifiWalkButton;
+    private WifiMapView wifiMapView;
+    private WifiSpectrumView wifiSpectrumView;
+    private TextView soundStatusView;
+    private TextView soundResultsView;
+    private Button soundPingButton;
+    private Button soundContinuousButton;
+    private EchoView echoView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -163,6 +204,76 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> refreshMagnetic(x, y, z, magnitude));
             }
         });
+        wifiController = new WifiController(this, new WifiController.Listener() {
+            @Override
+            public void onStatus(String status) {
+                runOnUiThread(() -> {
+                    wifiStatus = status;
+                    refreshWifiUi();
+                });
+            }
+
+            @Override
+            public void onConnection(WifiConnectionSnapshot connection) {
+                runOnUiThread(() -> {
+                    wifiConnection = connection;
+                    if (screen == Screen.WIFI && wifiWalking && connection != null) {
+                        wifiSurvey.add(huntX, huntY, connection.rssi,
+                                SystemClock.elapsedRealtime());
+                    }
+                    refreshWifiUi();
+                });
+            }
+
+            @Override
+            public void onAccessPoints(List<WifiAccessPoint> accessPoints) {
+                runOnUiThread(() -> {
+                    wifiAccessPoints = new ArrayList<>(accessPoints);
+                    refreshWifiUi();
+                });
+            }
+        });
+        acousticPingController = new AcousticPingController(this,
+                new AcousticPingController.Listener() {
+                    @Override
+                    public void onStatus(String status) {
+                        runOnUiThread(() -> {
+                            soundStatus = status;
+                            if (status.startsWith("Sound ping failed")) {
+                                soundContinuous = false;
+                            }
+                            refreshSoundUi();
+                        });
+                    }
+
+                    @Override
+                    public void onPingStarted() {
+                        runOnUiThread(() -> {
+                            soundStatus = "Ping sent · listening for reflections…";
+                            if (echoView != null) echoView.startPing();
+                            refreshSoundUi();
+                        });
+                    }
+
+                    @Override
+                    public void onResult(AcousticAnalysis.Result result) {
+                        runOnUiThread(() -> {
+                            soundResult = result;
+                            if (!result.playbackCompleted()) {
+                                soundStatus = "Speaker playback was incomplete · retrying is safe.";
+                            } else if (result.chirpDetected) {
+                                soundStatus = "Room response captured locally.";
+                            } else {
+                                soundStatus = "No clean chirp · next ping will try another mic path.";
+                            }
+                            refreshSoundUi();
+                            if (soundContinuous && foreground && screen == Screen.SOUND) {
+                                handler.removeCallbacks(soundLoop);
+                                handler.postDelayed(soundLoop, 900);
+                            }
+                        });
+                    }
+                });
         motionController = new HuntMotionController(this,
                 (headingDegrees, xSteps, ySteps, steps, status) -> runOnUiThread(() -> {
                     huntHeading = headingDegrees;
@@ -171,6 +282,7 @@ public final class MainActivity extends Activity {
                     huntSteps = steps;
                     huntMotionStatus = status;
                     refreshHuntMap();
+                    refreshWifiMap();
                 }));
 
         buildShell();
@@ -198,6 +310,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         closeFeedback();
+        if (acousticPingController != null) acousticPingController.close();
         super.onDestroy();
     }
 
@@ -215,10 +328,30 @@ public final class MainActivity extends Activity {
                                            int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_BLUETOOTH || requestCode == REQUEST_LOCATION
-                || requestCode == REQUEST_ACTIVITY) {
+                || requestCode == REQUEST_ACTIVITY || requestCode == REQUEST_WIFI
+                || requestCode == REQUEST_AUDIO) {
             stopSources();
             startCurrentSource();
             refreshNearby();
+            refreshWifiUi();
+            refreshSoundUi();
+        }
+        if (requestCode == REQUEST_AUDIO) {
+            boolean runContinuous = pendingSoundContinuous;
+            boolean runOnce = pendingSoundPing;
+            pendingSoundContinuous = false;
+            pendingSoundPing = false;
+            if (hasAudioPermission() && screen == Screen.SOUND) {
+                if (runContinuous) {
+                    soundContinuous = true;
+                    startSoundPing();
+                } else if (runOnce) {
+                    startSoundPing();
+                }
+            } else {
+                soundStatus = "Microphone permission was not granted.";
+                refreshSoundUi();
+            }
         }
     }
 
@@ -236,9 +369,13 @@ public final class MainActivity extends Activity {
         nav.setGravity(Gravity.CENTER);
         nav.setBackgroundColor(Color.rgb(11, 21, 31));
         nearbyNav = navButton("Nearby", () -> showScreen(Screen.NEARBY));
+        wifiNav = navButton("Wi-Fi", () -> showScreen(Screen.WIFI));
+        soundNav = navButton("Sound", () -> showScreen(Screen.SOUND));
         spaceNav = navButton("Space", () -> showScreen(Screen.SPACE));
-        magneticNav = navButton("Magnetic", () -> showScreen(Screen.MAGNETIC));
+        magneticNav = navButton("Magnet", () -> showScreen(Screen.MAGNETIC));
         nav.addView(nearbyNav, weightedNavParams());
+        nav.addView(wifiNav, weightedNavParams());
+        nav.addView(soundNav, weightedNavParams());
         nav.addView(spaceNav, weightedNavParams());
         nav.addView(magneticNav, weightedNavParams());
         root.addView(nav, new LinearLayout.LayoutParams(
@@ -253,6 +390,8 @@ public final class MainActivity extends Activity {
         content.removeAllViews();
         if (target == Screen.NEARBY) buildNearby();
         if (target == Screen.HUNT) buildHunt();
+        if (target == Screen.WIFI) buildWifi();
+        if (target == Screen.SOUND) buildSound();
         if (target == Screen.SPACE) buildSpace();
         if (target == Screen.MAGNETIC) buildMagnetic();
         updateNavigation();
@@ -280,6 +419,20 @@ public final class MainActivity extends Activity {
         magneticStateView = null;
         magneticAxesView = null;
         magneticGraphView = null;
+        wifiStatusView = null;
+        wifiNetworkView = null;
+        wifiRssiView = null;
+        wifiStrengthView = null;
+        wifiDetailsView = null;
+        wifiNearbyView = null;
+        wifiWalkButton = null;
+        wifiMapView = null;
+        wifiSpectrumView = null;
+        soundStatusView = null;
+        soundResultsView = null;
+        soundPingButton = null;
+        soundContinuousButton = null;
+        echoView = null;
     }
 
     private void buildNearby() {
@@ -415,6 +568,124 @@ public final class MainActivity extends Activity {
         refreshHunt();
     }
 
+    private void buildWifi() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout page = verticalPage();
+        page.addView(label("WI-FI WALK", 12, CYAN, Typeface.BOLD));
+        page.addView(label("Paint the room with radio", 28, INK, Typeface.BOLD));
+        page.addView(label("Walk slowly with the phone held consistently. The connected network updates live; full nearby scans are throttled by Android.",
+                14, MUTED, Typeface.NORMAL));
+
+        wifiStatusView = label(wifiStatus, 14, INK, Typeface.BOLD);
+        wifiStatusView.setPadding(0, dp(12), 0, dp(7));
+        page.addView(wifiStatusView);
+
+        Button scanButton = actionButton("Scan nearby Wi-Fi", () -> {
+            if (!hasWifiPermissions()) requestWifiPermissions();
+            else if (wifiController.isRunning()) wifiController.requestScan();
+            else wifiController.start();
+        });
+        page.addView(scanButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+
+        wifiNetworkView = label("Not connected to Wi-Fi", 17, MUTED, Typeface.BOLD);
+        wifiNetworkView.setGravity(Gravity.CENTER);
+        wifiNetworkView.setPadding(0, dp(12), 0, 0);
+        page.addView(wifiNetworkView);
+        wifiRssiView = label("— dBm", 44, INK, Typeface.BOLD);
+        wifiRssiView.setGravity(Gravity.CENTER);
+        page.addView(wifiRssiView);
+        wifiStrengthView = label("WAITING FOR SIGNAL", 17, CYAN, Typeface.BOLD);
+        wifiStrengthView.setGravity(Gravity.CENTER);
+        page.addView(wifiStrengthView);
+        wifiDetailsView = label("Connect to a network to paint its live signal.",
+                13, MUTED, Typeface.NORMAL);
+        wifiDetailsView.setGravity(Gravity.CENTER);
+        wifiDetailsView.setPadding(0, dp(3), 0, dp(7));
+        page.addView(wifiDetailsView);
+
+        wifiMapView = new WifiMapView(this);
+        wifiMapView.setBackground(rounded(Color.rgb(10, 24, 35), 16));
+        page.addView(wifiMapView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(330)));
+
+        LinearLayout walkControls = new LinearLayout(this);
+        wifiWalkButton = actionButton("", () -> {
+            if (!hasActivityPermission()) {
+                requestPermissions(new String[]{Manifest.permission.ACTIVITY_RECOGNITION},
+                        REQUEST_ACTIVITY);
+                return;
+            }
+            wifiWalking = !wifiWalking;
+            refreshWifiUi();
+        });
+        Button reset = actionButton("Reset map", this::resetWifiSurvey);
+        walkControls.addView(wifiWalkButton, weightedNavParams());
+        walkControls.addView(reset, weightedNavParams());
+        page.addView(walkControls, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+
+        TextView spectrumTitle = label("NEARBY RADIO LANES", 12, CYAN, Typeface.BOLD);
+        spectrumTitle.setPadding(0, dp(18), 0, dp(4));
+        page.addView(spectrumTitle);
+        page.addView(label("Bubble position is frequency; size is signal strength. A white ring marks the connected access point.",
+                13, MUTED, Typeface.NORMAL));
+        wifiSpectrumView = new WifiSpectrumView(this);
+        wifiSpectrumView.setBackground(rounded(Color.rgb(10, 24, 35), 16));
+        LinearLayout.LayoutParams spectrumParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(240));
+        spectrumParams.setMargins(0, dp(8), 0, dp(8));
+        page.addView(wifiSpectrumView, spectrumParams);
+
+        wifiNearbyView = label("No nearby scan results yet.", 13, MUTED, Typeface.NORMAL);
+        wifiNearbyView.setPadding(0, 0, 0, dp(22));
+        page.addView(wifiNearbyView);
+        scroll.addView(page);
+        content.addView(scroll);
+        refreshWifiUi();
+    }
+
+    private void buildSound() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout page = verticalPage();
+        page.addView(label("SOUND PING", 12, CYAN, Typeface.BOLD));
+        page.addView(label("Listen to the shape of echoes", 28, INK, Typeface.BOLD));
+        page.addView(label("The Pixel emits a short audible chirp, records about a third of a second, and compares the room response with the original sound. Echo rings estimate distance—not direction or object identity.",
+                14, MUTED, Typeface.NORMAL));
+
+        soundStatusView = label(soundStatus, 14, INK, Typeface.BOLD);
+        soundStatusView.setPadding(0, dp(13), 0, dp(8));
+        page.addView(soundStatusView);
+
+        echoView = new EchoView(this);
+        echoView.setBackground(rounded(Color.rgb(10, 24, 35), 16));
+        if (soundResult != null) echoView.setResult(soundResult);
+        page.addView(echoView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(390)));
+
+        LinearLayout controls = new LinearLayout(this);
+        soundPingButton = actionButton("", this::startSoundPing);
+        soundContinuousButton = actionButton("", this::toggleSoundContinuous);
+        controls.addView(soundPingButton, weightedNavParams());
+        controls.addView(soundContinuousButton, weightedNavParams());
+        LinearLayout.LayoutParams controlParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        controlParams.setMargins(0, dp(8), 0, 0);
+        page.addView(controls, controlParams);
+
+        soundResultsView = label("No acoustic snapshot yet.", 14, INK, Typeface.NORMAL);
+        soundResultsView.setPadding(0, dp(14), 0, dp(8));
+        page.addView(soundResultsView);
+        page.addView(label("For the cleanest experiment: disconnect earbuds, set media volume near 50%, keep the bottom speaker uncovered, hold still, and avoid talking during the ping. Raw microphone samples remain only in memory and are discarded after analysis.",
+                13, MUTED, Typeface.NORMAL));
+        page.addView(label("A full ring means ‘an echo may be this far away somewhere around the phone.’ Multiple walls and reflections can produce false or merged rings.",
+                13, AMBER, Typeface.BOLD));
+
+        scroll.addView(page);
+        content.addView(scroll);
+        refreshSoundUi();
+    }
+
     private void buildSpace() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout page = verticalPage();
@@ -498,6 +769,15 @@ public final class MainActivity extends Activity {
             feedback.setHapticsEnabled(hapticsEnabled);
             feedback.start();
         }
+        if (screen == Screen.WIFI) {
+            motionController.start();
+            if (hasWifiPermissions()) {
+                wifiController.start();
+            } else {
+                wifiStatus = "Precise location and Nearby Wi-Fi permission unlock the map.";
+                refreshWifiUi();
+            }
+        }
         if (screen == Screen.SPACE) {
             if (hasLocationPermission()) gnssController.start();
             else if (spaceStatusView != null) {
@@ -509,6 +789,10 @@ public final class MainActivity extends Activity {
 
     private void stopSources() {
         if (bleScanner != null) bleScanner.stop();
+        if (wifiController != null) wifiController.stop();
+        handler.removeCallbacks(soundLoop);
+        soundContinuous = false;
+        if (acousticPingController != null) acousticPingController.cancel();
         if (gnssController != null) gnssController.stop();
         if (magneticController != null) magneticController.stop();
         if (motionController != null) motionController.stop();
@@ -528,7 +812,19 @@ public final class MainActivity extends Activity {
             if (!foreground) return;
             refreshNearby();
             refreshHunt();
+            if (screen == Screen.WIFI && wifiController != null) {
+                wifiController.refreshConnection();
+            }
             handler.postDelayed(this, 500);
+        }
+    };
+
+    private final Runnable soundLoop = new Runnable() {
+        @Override
+        public void run() {
+            if (foreground && screen == Screen.SOUND && soundContinuous) {
+                startSoundPing();
+            }
         }
     };
 
@@ -687,6 +983,202 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void refreshWifiUi() {
+        if (wifiStatusView != null) wifiStatusView.setText(wifiStatus);
+        if (wifiWalkButton != null) {
+            wifiWalkButton.setText(!hasActivityPermission() ? "Allow steps"
+                    : wifiWalking ? "Pause walk" : "Resume walk");
+        }
+
+        WifiSurvey.Snapshot survey = wifiSurvey.snapshot();
+        if (wifiConnection == null) {
+            if (wifiNetworkView != null) wifiNetworkView.setText("Not connected to Wi-Fi");
+            if (wifiRssiView != null) wifiRssiView.setText("— dBm");
+            if (wifiStrengthView != null) {
+                wifiStrengthView.setText("WAITING FOR SIGNAL");
+                wifiStrengthView.setTextColor(MUTED);
+            }
+            if (wifiDetailsView != null) {
+                wifiDetailsView.setText("Connect to a Wi-Fi network, then walk around to paint its relative signal.\n"
+                        + huntMotionStatus);
+            }
+        } else {
+            int rssi = wifiConnection.rssi;
+            if (wifiNetworkView != null) wifiNetworkView.setText(wifiConnection.ssid);
+            if (wifiRssiView != null) wifiRssiView.setText(rssi + " dBm");
+            if (wifiStrengthView != null) {
+                wifiStrengthView.setText(WifiMath.strengthLabel(rssi));
+                wifiStrengthView.setTextColor(colorForRssi(rssi));
+            }
+            if (wifiDetailsView != null) {
+                int channel = WifiMath.channelForFrequency(wifiConnection.frequencyMhz);
+                String channelText = channel > 0 ? " · channel " + channel : "";
+                String mloText = wifiConnection.mloLinkCount > 0
+                        ? " · " + wifiConnection.mloLinkCount + " MLO links" : "";
+                String points = survey.samples.size() == 1 ? "1 point"
+                        : survey.samples.size() + " points";
+                String best = survey.samples.isEmpty() ? "—"
+                        : survey.bestRssi + " dBm best · " + survey.averageRssi + " dBm average";
+                wifiDetailsView.setText(WifiMath.bandLabel(wifiConnection.frequencyMhz)
+                        + channelText + " · " + wifiConnection.frequencyMhz + " MHz\n"
+                        + wifiStandardLabel(wifiConnection.wifiStandard)
+                        + " · Rx " + wifiConnection.rxMbps + " / Tx "
+                        + wifiConnection.txMbps + " Mbps" + mloText + "\n"
+                        + huntSteps + " steps · " + points + " · " + best + "\n"
+                        + (wifiWalking ? huntMotionStatus : "Walk capture paused"));
+            }
+        }
+
+        if (wifiSpectrumView != null) {
+            wifiSpectrumView.setAccessPoints(wifiAccessPoints,
+                    wifiConnection == null ? null : wifiConnection.bssid);
+        }
+        if (wifiNearbyView != null) {
+            if (wifiAccessPoints.isEmpty()) {
+                wifiNearbyView.setText("No nearby scan results yet. Connected Wi-Fi still updates live.");
+            } else {
+                StringBuilder text = new StringBuilder();
+                int rttCount = 0;
+                for (WifiAccessPoint item : wifiAccessPoints) {
+                    if (item.rttCapable) rttCount++;
+                }
+                text.append(wifiAccessPoints.size()).append(" access points")
+                        .append(" · ").append(rttCount).append(" RTT-capable");
+                int limit = Math.min(8, wifiAccessPoints.size());
+                for (int i = 0; i < limit; i++) {
+                    WifiAccessPoint item = wifiAccessPoints.get(i);
+                    text.append('\n').append(item.ssid)
+                            .append(" · ").append(item.rssi).append(" dBm · ")
+                            .append(WifiMath.bandLabel(item.frequencyMhz));
+                    if (item.channel > 0) text.append(" ch ").append(item.channel);
+                    if (item.rttCapable) text.append(" · RTT");
+                }
+                wifiNearbyView.setText(text.toString());
+            }
+        }
+        refreshWifiMap();
+    }
+
+    private void refreshWifiMap() {
+        if (wifiMapView != null) {
+            wifiMapView.setSurvey(wifiSurvey.snapshot(), huntHeading, huntX, huntY);
+        }
+    }
+
+    private void resetWifiSurvey() {
+        wifiSurvey.reset();
+        wifiWalking = true;
+        if (motionController != null) motionController.reset();
+        refreshWifiUi();
+    }
+
+    private void startSoundPing() {
+        if (!hasAudioPermission()) {
+            pendingSoundPing = true;
+            pendingSoundContinuous = false;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_AUDIO);
+            return;
+        }
+        handler.removeCallbacks(soundLoop);
+        acousticPingController.ping();
+        refreshSoundUi();
+    }
+
+    private void toggleSoundContinuous() {
+        if (soundContinuous) {
+            soundContinuous = false;
+            handler.removeCallbacks(soundLoop);
+            acousticPingController.cancel();
+            soundStatus = "Continuous ping stopped.";
+            refreshSoundUi();
+            return;
+        }
+        if (!hasAudioPermission()) {
+            pendingSoundContinuous = true;
+            pendingSoundPing = false;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_AUDIO);
+            return;
+        }
+        soundContinuous = true;
+        startSoundPing();
+    }
+
+    private void refreshSoundUi() {
+        if (soundStatusView != null) soundStatusView.setText(soundStatus);
+        boolean busy = acousticPingController != null && acousticPingController.isBusy();
+        if (soundPingButton != null) {
+            soundPingButton.setText(hasAudioPermission() ? "Ping once" : "Allow mic + ping");
+            soundPingButton.setEnabled(!busy);
+        }
+        if (soundContinuousButton != null) {
+            String text;
+            if (soundContinuous) text = "Stop continuous";
+            else text = hasAudioPermission() ? "Continuous" : "Allow mic + loop";
+            soundContinuousButton.setText(text);
+        }
+        if (echoView != null && soundResult != null) echoView.setResult(soundResult);
+        if (soundResultsView == null) return;
+        if (soundResult == null) {
+            soundResultsView.setText("No acoustic snapshot yet. One ping will show up to six separated echo peaks within an experimental 0.45–8 meter window.");
+            return;
+        }
+        String diagnostics = "Mic peak "
+                + Math.round(soundResult.capturedPeakFraction * 100) + "% · RMS "
+                + Math.round(soundResult.capturedRmsFraction * 100) + "% · chirp match "
+                + Math.round(soundResult.directLevel * 100) + "%\nOutput "
+                + soundResult.outputSampleRate / 1_000f + " kHz · "
+                + soundResult.outputChannels + (soundResult.outputChannels == 1
+                        ? " channel" : " channels")
+                + " · played " + soundResult.playedFrames + "/"
+                + soundResult.expectedFrames + " frames · "
+                + soundResult.underrunCount + " underruns · threshold "
+                + soundResult.startThresholdFrames + "\nInput: "
+                + soundResult.captureSource;
+        if (!soundResult.playbackCompleted()) {
+            soundResultsView.setText("Android did not consume the complete chirp buffer. The echo result is not usable.\n"
+                    + diagnostics);
+            return;
+        }
+        if (!soundResult.chirpDetected) {
+            String hint = soundResult.capturedPeakFraction < 0.005f
+                    ? "The capture was nearly silent. Close other microphone apps and uncover the microphone openings."
+                    : "The microphone heard audio, but it did not match the emitted sweep strongly enough.";
+            soundResultsView.setText(hint
+                    + " The next ping will automatically try another microphone path.\n"
+                    + diagnostics);
+            return;
+        }
+        if (soundResult.peaks.isEmpty()) {
+            soundResultsView.setText("The chirp was captured, but no clearly separated echo peaks passed the detector. Try a larger room or change the phone position.\n"
+                    + diagnostics);
+            return;
+        }
+        StringBuilder text = new StringBuilder("Strong separated echo rings:");
+        for (AcousticAnalysis.EchoPeak peak : soundResult.peaks) {
+            text.append("\n")
+                    .append(String.format(Locale.US, "%.2f m", peak.distanceMeters))
+                    .append(" · relative strength ")
+                    .append(Math.round(peak.strength * 100)).append('%');
+        }
+        text.append("\n\n").append(diagnostics)
+                .append("\nDistances are experimental round-trip delays, not identified walls or objects.");
+        soundResultsView.setText(text.toString());
+    }
+
+    private static String wifiStandardLabel(int standard) {
+        return switch (standard) {
+            case 1 -> "Wi-Fi legacy";
+            case 4 -> "Wi-Fi 4 (802.11n)";
+            case 5 -> "Wi-Fi 5 (802.11ac)";
+            case 6 -> "Wi-Fi 6/6E (802.11ax)";
+            case 7 -> "WiGig (802.11ad)";
+            case 8 -> "Wi-Fi 7 (802.11be)";
+            default -> "Wi-Fi standard unknown";
+        };
+    }
+
     private void resetHuntSurvey() {
         huntSurvey.reset();
         lastSurveySampleCount = -1;
@@ -758,9 +1250,11 @@ public final class MainActivity extends Activity {
 
     private void updateNavigation() {
         styleNav(nearbyNav, screen == Screen.NEARBY || screen == Screen.HUNT);
+        styleNav(wifiNav, screen == Screen.WIFI);
+        styleNav(soundNav, screen == Screen.SOUND);
         styleNav(spaceNav, screen == Screen.SPACE);
         styleNav(magneticNav, screen == Screen.MAGNETIC);
-        if (screen == Screen.HUNT) {
+        if (screen == Screen.HUNT || screen == Screen.WIFI || screen == Screen.SOUND) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -780,6 +1274,34 @@ public final class MainActivity extends Activity {
     private boolean hasActivityPermission() {
         return checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION)
                 == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasAudioPermission() {
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasWifiPermissions() {
+        boolean precise = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        return precise && (Build.VERSION.SDK_INT < 33
+                || checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
+                == PackageManager.PERMISSION_GRANTED);
+    }
+
+    private void requestWifiPermissions() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(new String[]{
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.NEARBY_WIFI_DEVICES
+            }, REQUEST_WIFI);
+        } else {
+            requestPermissions(new String[]{
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+            }, REQUEST_WIFI);
+        }
     }
 
     private void requestBluetoothPermissions() {
@@ -811,7 +1333,9 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setAllCaps(false);
         button.setText(text);
-        button.setTextSize(14);
+        button.setTextSize(12);
+        button.setMinWidth(0);
+        button.setPadding(dp(2), 0, dp(2), 0);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setOnClickListener(view -> action.run());
         return button;

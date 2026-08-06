@@ -1,15 +1,20 @@
 # Find It Fun
 
-> **TL;DR:** Inspired by [this Bluetooth-finding tweet](https://x.com/un1c0rnioz/status/2084686552299634805)
+> **TL;DR:** This project ended up going beyond Bluetooth and experimenting with
+> my phone's sensors. It was only tested on a Pixel phone; everything else is
+> likely to break in dramatic fashion. Good luck.
+>
+> Inspired by [this Bluetooth-finding tweet](https://x.com/un1c0rnioz/status/2084686552299634805)
 > and its author's [`findphone` repository](https://github.com/ben-z/findphone),
 > Find It Fun is an offline Android app for discovering nearby Bluetooth
-> devices, following their signal warmer or colder, saving your own device
-> names, and exploring GNSS satellites and magnetic fields for fun.
+> devices, walking a live Wi-Fi signal map, following Bluetooth signals warmer
+> or colder, and exploring GNSS satellites and magnetic fields for fun.
 
 <p align="center">
   <img src="docs/screenshots/leviot-hunt.png" alt="Hunting a saved Bluetooth device" width="31%">
   <img src="docs/screenshots/space-mode.png" alt="GNSS satellites in Space mode" width="31%">
   <img src="docs/screenshots/magnetic-mode.png" alt="Live magnetic field meter" width="31%">
+  <img src="docs/screenshots/wifi-walk.png" alt="Walking a live Wi-Fi signal map" width="31%">
 </p>
 
 The app keeps all observations on the phone and includes:
@@ -20,11 +25,33 @@ The app keeps all observations on the phone and includes:
 - **My Devices:** hold a device row or use Name / device info while hunting to
   save a local nickname and inspect manufacturer, service, PHY, transmit-power,
   pairing, and advertisement metadata.
+- **Wi-Fi Walk:** paint the connected network's live signal strength onto a
+  relative step-and-heading trail, inspect link speed/band/channel/standard,
+  and visualize nearby access points across 2.4, 5, and 6 GHz radio lanes.
+- **Sound Ping:** emit a short audible chirp, measure the local room response,
+  and visualize separated echo delays as experimental omnidirectional distance
+  rings and a distance-versus-echo-strength profile.
 - **Space:** a live GNSS sky plot with satellite signal strength.
 - **Magnetic:** a three-axis magnetic field meter and live history.
 
 Bluetooth devices must be advertising to appear. This app measures signal
 strength, not direction, and it does not upload observations.
+
+Wi-Fi Walk is a relative radio survey, not a camera and not through-wall object
+imaging. Hold the phone consistently and walk a loop or dogleg around the room.
+Colored blobs are measured connected-network RSSI at step-derived positions;
+they are not exact meter coordinates. Android heavily throttles repeated full
+nearby Wi-Fi scans, but connected-network RSSI and link properties can update
+more frequently. Nearby rows marked `RTT` advertise ranging support; this first
+version identifies them but does not yet perform Wi-Fi RTT ranging.
+
+Sound Ping is experimental acoustic ranging, not object recognition. A ring
+means an echo with that approximate round-trip distance was detected somewhere
+around the phone; a single microphone measurement does not reveal its bearing.
+Speaker/microphone latency cancels against the directly captured chirp, but
+room multipath, automatic audio processing, phone placement, and covered ports
+can create false, merged, or missing peaks. One-shot and continuous modes keep
+their raw microphone samples only in memory and discard them after analysis.
 
 The Android app has no Internet permission, analytics, advertisements, or user
 accounts. See [PRIVACY.md](PRIVACY.md) for its data and permission behavior.
